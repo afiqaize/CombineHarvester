@@ -74,6 +74,7 @@ parser.add_argument("--mass-cut", help = "comma-separated minmax value, to cut o
                     dest = "cut", default = "", required = False,
                     type = lambda s: [] if s == "" else sorted(tokenize_to_list(remove_spaces_quotes(s), astype = int)))
 parser.add_argument("--xsec", help = "report toponia as xsec", action = "store_true", dest = "xsec", required = False)
+parser.add_argument('--no-total', help = "dont plot the total signal", action="store_false", dest="total")
 args = parser.parse_args()
 args.logy = args.log or args.logy
 args.readbatch = args.readbatch and os.path.isfile(args.batch)
@@ -101,7 +102,8 @@ def full_extent(ax, pad = 0.0):
 def plot_eventperbin(ax, bins, centers, smhists, total, data, log, fit, channel):
     single_slice = args.splitbins or args.project != "none"
     angular = args.project in ["chel", "chan"]
-    factor = 1000. if angular else 1.
+    #factor = 1000. if angular else 1.
+    factor = 1
     if fit == "p":
         fstage = "Pre"
         ftype = " "
@@ -109,7 +111,7 @@ def plot_eventperbin(ax, bins, centers, smhists, total, data, log, fit, channel)
         fstage = "Post"
         ftype = " (s + b) " if fit == "s" else " (b) "
 
-    width = np.diff(bins)
+    width = np.ones(len(bins)-1) if angular else np.diff(bins)
     colors = [proc_colors[k] for k in smhists.keys()]
     unclabel = "Unc." if single_slice else f"{fstage}fit{ftype}uncertainty"
     for ibin in range(len(bins) - 1):
@@ -139,19 +141,21 @@ def plot_eventperbin(ax, bins, centers, smhists, total, data, log, fit, channel)
         color = colors,
         zorder = -90
     )
-    ax.set_ylabel("<Events> / $10^{3}$" if angular else "<Events / GeV>", fontsize=24)
+    ax.set_ylabel("Events" if angular else "Events / GeV", fontsize=24)
     if log[0]:
         ax.set_xscale("log")
     if log[1]:
         ax.set_yscale("log")
         ymin = 0.5 * np.amin(data[0] / width / factor)
-        if args.splitbins:
+        if args.splitbins or single_slice:
             ymax = 1.05
         else:
             ymax = 1.08 if "j" in channel else 1.12
         ax.set_ylim(ymin, ax.transData.inverted().transform(ax.transAxes.transform([0, ymax]))[1])
     else:
+        ax.ticklabel_format(axis="y", style="sci", scilimits=(0, 0), useMathText=True)
         ax.set_ylim(0, ax.get_ylim()[1] * 1.1)
+        ax.yaxis.get_offset_text().set_x(-0.15)
 
 
 
@@ -198,12 +202,11 @@ def plot_ratio(ax, bins, centers, data, total, signals, gvalues, sigscale, fit, 
         if fit == "p":
             if symbol == "A" or symbol == "H":
                 signal_label += f", $\\mathrm{{{poiname}}}_{{\\mathrm{{{symbol}}}}} = 1$"
-            elif symbol == r"$\eta_{\mathrm{t}}$":
-                signal_label = f"$\\eta_{{\\mathrm{{t}}}}$, $\\mu(\\eta_{{\\mathrm{{t}}}}) = 1$"
-            elif symbol == r"$\chi_{\mathrm{t}}$":
-                signal_label = f"$\\chi_{{\\mathrm{{t}}}}$, $\\mu(\\chi_{{\\mathrm{{t}}}}) = 1$"
-            elif symbol == r"$\psi_{\mathrm{t}}$":
-                signal_label = f"$\\psi_{{\\mathrm{{t}}}}$, $\\mu(\\psi_{{\\mathrm{{t}}}}) = 1$"
+            elif symbol in [r"$\eta_{\mathrm{t}}$", r"$\chi_{\mathrm{t}}$", r"$\psi_{\mathrm{t}}$"]:
+                if args.xsec:
+                    signal_label = f"{symbol}, $\\sigma({symbol[1:-1]}) = 6.43$ pb"
+                else:
+                    signal_label = f"{symbol}, $\\mu({symbol[1:-1]}) = 1$"
         elif key in gvalues and gvalues[key] is not None:
             poi = ("sigma" if args.xsec else "mu", " \,\\mathrm{pb}" if args.xsec else "")
             if symbol == "A" or symbol == "H":
@@ -259,34 +262,45 @@ def plot_ratio(ax, bins, centers, data, total, signals, gvalues, sigscale, fit, 
         ax.set_ylim(0.79, 1.21)
         ax.set_yticks([0.8, 1.0, 1.2])
     else:
-        ax.set_ylim(0.895, 1.105)
+        if single_slice:
+            ax.set_ylim(0.89, 1.11)
+        else:
+            ax.set_ylim(0.895, 1.105)
         ax.set_yticks([0.9, 1.0, 1.1])
     ax.set_ylabel(ratiolabels[fit], fontsize=24)
     if fit == "p":
         fittype = "Prefit"
+        fittypelen = len(fittype)
     elif fit == "b":
         fittype = "Postfit (FO pQCD + BG)"
+        fittypelen = len(fittype)
     elif fit == "s" and len(args.assignal):
         fittype = "Postfit (FO pQCD + BG "
+        fittypelen = len(fittype)
         if "EtaT" in args.assignal:
             fittype += "+ $\mathbf{\eta_{\mathrm{t}}}$"
+            fittypelen += len(" + x")
         if "ChiT" in args.assignal:
             fittype += "+ $\mathbf{\chi_{\mathrm{t}}}$"
+            fittypelen += len(" + x")
         if "PsiT" in args.assignal:
             fittype += "+ $\mathbf{\psi_{\mathrm{t}}}$"
+            fittypelen += len(" + x")
         fittype += ")"
     else:
         fittype = "Postfit (FO pQCD + BG + A/H)"
+        fittypelen = len(fittype)
     if not single_slice:
         handles.insert(0, Rectangle((0,0), 0, 0, facecolor="white", edgecolor="white", alpha=0.))
-        labels.insert(0, " "*len(fittype))
-    if not single_slice or len(handles) < 2:
+        labels.insert(0, " "*(fittypelen+10))
+    if not (single_slice and args.panel == "both"):
         handles.append(handle_unc)
         labels.append("Uncertainty")
     if log[0]:
         ax.set_xscale("log")
-    legend_ncol = 1 if single_slice else 5
-    ax.legend(handles=handles, labels=labels, loc = "lower left", bbox_to_anchor = (0, 1.0, 1, 0.2), borderaxespad = 0, ncol = legend_ncol, mode = "expand", fancybox = False).get_frame().set_edgecolor("black")
+    if not (single_slice and args.panel == "both" and len(signals) == 0):
+        legend_ncol = 1 if single_slice else 5
+        ax.legend(handles=handles, labels=labels, loc = "lower left", bbox_to_anchor = (0, 1.0, 1, 0.2), borderaxespad = 0, ncol = legend_ncol, mode = "expand", fancybox = False).get_frame().set_edgecolor("black")
 
 
 
@@ -366,8 +380,8 @@ def plot(channel, year, fit,
         fig, (ax0, ax1, ax2) = plt.subplots(
             nrows = 3,
             sharex = True,
-            gridspec_kw = {"height_ratios": [0.105 if single_slice else 0.001, 1, 0.9]},
-            figsize = (5.0, 7.0) if single_slice else (19.2, 6.6),
+            gridspec_kw = {"height_ratios": [0.115 if single_slice else 0.001, 1, 0.9]},
+            figsize = (5.0, 6.6) if single_slice else (19.2, 6.6),
             dpi=600
         )
     else:
@@ -471,12 +485,12 @@ def plot(channel, year, fit,
         if single_slice and args.panel == "upper":
             annstr = title
         elif single_slice and args.panel == "lower":
-            annstr = fittype + ", " + title
+            annstr = fittype# + ", " + title
         else:
             annstr = fittype
         ax2.annotate(annstr, (xpos, ypos), xycoords="axes fraction", va=va, ha=ha, fontsize=20, fontweight="normal" if (single_slice and args.panel == "upper") else "bold", zorder=7777)
-        if args.panel == "both":
-            ax1.annotate(title, (0.97, 1.028), xycoords="axes fraction", va="bottom", ha="right", fontsize=20, fontweight="normal", zorder=7777) # xxx
+        #if args.panel == "both":
+        #    ax1.annotate(title, (0.97, 1.028), xycoords="axes fraction", va="bottom", ha="right", fontsize=20, fontweight="normal", zorder=7777) # xxx
     elif args.panel != "upper":
         ax2.annotate(fittype, (0.007, 1.038), xycoords="axes fraction", va="bottom", ha="left", fontsize=20, fontweight="bold", zorder=7777)
 
@@ -495,11 +509,24 @@ def plot(channel, year, fit,
         fig.subplots_adjust(hspace = 0.24, left = 0.055, right = 1 - 0.003, top = 1 - 0.05)
     else:
         hep.cms.label(ax = ax0, data=True, label=cmslabel, lumi = lumis[year], loc = 0, year = year, fontsize = 19 if args.preliminary else 24)
-        hspace = 0.81 if args.panel == "lower" and len(args.assignal) >= 2 else 0.50
+        if len(allsigs) == 3:
+            hspace = 1.5
+        else:
+            hspace = 0.3 * (len(allsigs) + 1) - 0.06 if args.panel == "lower" else 0.50
         fig.subplots_adjust(hspace = hspace, left = 0.075, right = 1 - 0.025, top = 1 - 0.075)
 
     bbox = ax2.get_position()
-    offset = -0.025 if single_slice and args.panel == "lower" else -0.02 if single_slice and args.panel == "upper" else -0.053
+    offset = -0.01
+    if single_slice:
+        if args.panel == "both":
+            if len(allsigs) == 0:
+                offset = 0.05
+            elif len(allsigs) == 1:
+                offset = -0.012
+            elif len(allsigs) == 3:
+                offset = -0.11
+        else:
+            offset = -0.025 if args.panel == "lower" else -0.02
     ax2.set_position([bbox.x0, bbox.y0 + offset, bbox.x1 - bbox.x0, bbox.y1 - bbox.y0])
     figwidth = 6.0 if single_slice else 19.2
     if args.panel == "both":
@@ -530,7 +557,7 @@ def plot(channel, year, fit,
                 bintexts = []
                 ypos = 0.08 if args.panel == "lower" else 0.9 if single_slice else 0.912
                 if args.splitbins:
-                    for j, (variable, edges) in enumerate(extra_axes.items()):
+                    for j, (variable, edges) in enumerate(reversed(extra_axes.items())):
                         edge_idx = np.unravel_index(i, tuple(len(b) - 1 for b in extra_axes.values()))[j]
                         text = r"{} < {} < {}".format(edges[edge_idx], variable, edges[edge_idx + 1])
                         bintexts.append(ax1.text(1 / len(extra_axes) * (j + 0.5), ypos, text, horizontalalignment = "center", fontsize = 19, transform = ax1.transAxes))
@@ -540,6 +567,7 @@ def plot(channel, year, fit,
                     ax2.set_xlim(10 if ismbbll and log[0] else first_ax_width*i, first_ax_width*(i+1))
                 else:
                     ax2.set_xlim(-1, 1)
+                fig.align_ylabels()
                 if args.splitbins:
                     fig.savefig(f"{args.odir}/{sstr}{args.ptag}_fit_{fit}_{cstr}_{ystr}_{args.panel}_bin{i+1}{fmt}", transparent = True, bbox_inches = extent)
                 else:
@@ -552,6 +580,7 @@ def plot(channel, year, fit,
                         text = r"{} < {} < {}".format(edges[edge_idx], variable, edges[edge_idx + 1])
                         if not single_slice:
                             ax1.text(1 / num_extrabins * (i + 0.5), 0.912 - j * 0.11, text, horizontalalignment = "center", fontsize = 19, transform = ax1.transAxes)
+            fig.align_ylabels()
             fig.savefig(f"{args.odir}/{sstr}{args.ptag}_fit_{fit}_{cstr}_{ystr}_{args.panel}{fmt}", transparent = True, bbox_inches = extent)
     fig.clf()
 
@@ -617,16 +646,27 @@ def project(planes, nbins, target, cut, icut, matrix):
     }
     target = targets.get(target, 0)
     ret = planes.copy()
+    if target == 1:
+        label = list(planes["binning"].keys())[2]
+    elif target == 2:
+        label = list(planes["binning"].keys())[1]
+    else:
+        label = list(planes["binning"].keys())[target]
 
+    print("Projecting SM...")
     ret["smhists"] = {k: actually_project(ret["smhists"][k], nbins, target, cut, icut, matrix) for k in ret["smhists"]}
+    print("Projecting data...")
     ret["datavalues"] = actually_project(ret["datavalues"], nbins, target, cut, icut, matrix)
+    print("Projecting total...")
     ret["total"] = actually_project(ret["total"], nbins, target, cut, icut, matrix)
+    print("Projecting signals...")
     ret["promotions"] = {k: actually_project(ret["promotions"][k], nbins, target, cut, icut, matrix) for k in ret["promotions"]}
     ret["signals"] = {k: actually_project(ret["signals"][k], nbins, target, cut, icut, matrix) for k in ret["signals"]}
+    print("Projecting data errors...")
     dataerr_lo = (actually_project(ret["datahist_errors"][0]**2, nbins, target, cut, icut, matrix))**.5
     dataerr_hi = (actually_project(ret["datahist_errors"][1]**2, nbins, target, cut, icut, matrix))**.5
     ret["datahist_errors"] = np.array([dataerr_lo, dataerr_hi])
-    ret["binning"] = {list(planes["binning"].keys())[target] : list(planes["binning"].values())[target] if target == 0 else [-1, -1/3, 1/3, 1]}
+    ret["binning"] = {label : list(planes["binning"].values())[target] if target == 0 else [-1, -1/3, 1/3, 1]}
     ret["num_extrabins"] = int(np.prod(list(len(edges) - 1 for edges in list(ret["binning"].values())[1:])))
     ret["extra_axes"] = {'none': list(ret["binning"].values())[0] if target == 0 else [-1, -1/3, 1/3, 1]}
     ret["first_ax_binning"] = list(ret["binning"].values())[0] if target == 0 else np.array([-1, -1/3, 1/3, 1])
@@ -640,6 +680,7 @@ def project(planes, nbins, target, cut, icut, matrix):
         cut,
         masses[ list(planes["binning"].keys())[0].replace(" (GeV)", "") ]
     )
+    print("projection done.")
     return ret
 
 def plot_projection(sums, binedges, cut, matrix):
@@ -698,7 +739,7 @@ with uproot.open(args.batch if args.readbatch else args.ifile) as f:
         bins = (np.cumsum(binwidths)[None] + (np.arange(num_extrabins) * first_ax_width)[:, None]).flatten()
         bins = np.r_[0, bins]
         centers = (bins[1:] + bins[:-1]) / 2
-
+        
         smhists = {}
         signals = {}
         promotions = {}
@@ -751,19 +792,19 @@ with uproot.open(args.batch if args.readbatch else args.ifile) as f:
                     else:
                         signals[(match.group(1), mass, width)] = args.sigscale[isig] * hist
 
-            if len(signals) > 1 and len(promotions) == 0:
+            if args.total and len(signals) > 1 and len(promotions) == 0:
                 signals[("Total", None, None)] = sum(signals.values()) if fit == "p" and args.ipf != "" else directory["total_signal"].to_hist()[:len(centers)]
 
-        if len(signals) == 0 and len(promotions) > 1:
+        if args.total and len(signals) == 0 and len(promotions) > 1:
             signals[("Total", None, None)] = sum(promotions.values())
 
         if fit != "p":
             if gvalues_p is None:
-                gvalues_p = get_poi_values(args.ifile, signals | promotions, args.poi, 6.43 if args.xsec else 1)
+                gvalues_p = get_poi_values(args.ifile, signals | promotions, args.poi,
+                                          6.43 if args.xsec else 1, use_cross="cross" in args.poi)
             gvalues = gvalues_p
         else:
             gvalues = {}
-
         total = reduce(lambda a,b: a+b, smhists.values())
         #total = directory["total_background"].to_hist()[:len(centers)]
 
